@@ -63,9 +63,11 @@ public class MainExampleController : MonoBehaviour {
 	/// <param name="result">Result the PlayFab model returned from the login request</param>
 	public void AfterLogin(string url, int callId, object request, object result, PlayFab.PlayFabError error, object customData)
 	{
+		LoginResult lr = null;
 		try
 		{
-			this.activeUserInfo.Init((PlayFab.ClientModels.LoginResult)result);
+			lr = PlayFab.Json.JsonConvert.DeserializeObject<LoginResult>((string)result);
+			this.activeUserInfo.Init(lr);
 		}
 		catch(System.Exception ex)
 		{
