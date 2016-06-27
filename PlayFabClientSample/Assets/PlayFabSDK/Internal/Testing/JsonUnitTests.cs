@@ -231,6 +231,25 @@ namespace PlayFab.UUnit
 
             testContext.EndTest(UUnitFinishState.PASSED, null);
         }
+
+        [UUnitTest]
+        public void SpecificCardTest(UUnitTestContext testContext)
+        {
+            string cardData = PlayFabUtil.ReadAllFileText("C:\\CardJson.json");
+            var result = JsonWrapper.DeserializeObject<Dictionary<string, object>>(cardData);
+            var version = result["Version"] as string;
+            var keywords = result["Keywords"] as List<object>;
+            var subtypes = result["Subtypes"] as List<object>;
+            var cards = result["Cards"] as List<object>;
+
+            testContext.NotNull(result);
+            testContext.True(!string.IsNullOrEmpty(version));
+            testContext.True(keywords != null && keywords.Count > 0);
+            testContext.True(subtypes != null && subtypes.Count > 0);
+            testContext.True(cards != null && cards.Count > 0);
+
+            testContext.EndTest(UUnitFinishState.PASSED, null);
+        }
     }
 }
 
