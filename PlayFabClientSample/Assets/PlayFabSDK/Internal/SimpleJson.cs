@@ -71,11 +71,14 @@ using System.Text;
 // ReSharper disable SuggestUseVarKeywordEvident
 namespace PlayFab.Json
 {
-    // [AttributeUsage(AttributeTargets.Property | AttributeTargets.Field)]
-    // public class JsonProperty : Attribute
-    // {
-    //     public string PropertyName;
-    // }
+    /// <summary>
+    /// Customize the json output of a field or property
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Property | AttributeTargets.Field)]
+    public class JsonProperty : Attribute
+    {
+        public string PropertyName;
+    }
 
     /// <summary>
     /// Represents the json array.
@@ -1268,7 +1271,7 @@ namespace PlayFab.Json
  class PocoJsonSerializerStrategy : IJsonSerializerStrategy
     {
         internal IDictionary<Type, ReflectionUtils.ConstructorDelegate> ConstructorCache;
-        internal IDictionary<Type, IDictionary<string, ReflectionUtils.GetDelegate>> GetCache;
+        internal IDictionary<Type, IDictionary<MemberInfo, ReflectionUtils.GetDelegate>> GetCache;
         internal IDictionary<Type, IDictionary<string, KeyValuePair<Type, ReflectionUtils.SetDelegate>>> SetCache;
 
         internal static readonly Type[] EmptyTypes = new Type[0];
@@ -1284,13 +1287,16 @@ namespace PlayFab.Json
         public PocoJsonSerializerStrategy()
         {
             ConstructorCache = new ReflectionUtils.ThreadSafeDictionary<Type, ReflectionUtils.ConstructorDelegate>(ContructorDelegateFactory);
-            GetCache = new ReflectionUtils.ThreadSafeDictionary<Type, IDictionary<string, ReflectionUtils.GetDelegate>>(GetterValueFactory);
+            GetCache = new ReflectionUtils.ThreadSafeDictionary<Type, IDictionary<MemberInfo, ReflectionUtils.GetDelegate>>(GetterValueFactory);
             SetCache = new ReflectionUtils.ThreadSafeDictionary<Type, IDictionary<string, KeyValuePair<Type, ReflectionUtils.SetDelegate>>>(SetterValueFactory);
         }
 
-        protected virtual string MapClrMemberNameToJsonFieldName(string clrPropertyName)
+        protected virtual string MapClrMemberNameToJsonFieldName(MemberInfo memberInfo)
         {
-            return clrPropertyName;
+            // TODO: Optimize and/or cache
+            foreach (JsonProperty eachProp in memberInfo.GetCustomAttributes(typeof(JsonProperty), true))
+                return eachProp.PropertyName;
+            return memberInfo.Name;
         }
 
         internal virtual ReflectionUtils.ConstructorDelegate ContructorDelegateFactory(Type key)
@@ -1298,9 +1304,9 @@ namespace PlayFab.Json
             return ReflectionUtils.GetContructor(key, key.IsArray ? ArrayConstructorParameterTypes : EmptyTypes);
         }
 
-        internal virtual IDictionary<string, ReflectionUtils.GetDelegate> GetterValueFactory(Type type)
+        internal virtual IDictionary<MemberInfo, ReflectionUtils.GetDelegate> GetterValueFactory(Type type)
         {
-            IDictionary<string, ReflectionUtils.GetDelegate> result = new Dictionary<string, ReflectionUtils.GetDelegate>();
+            IDictionary<MemberInfo, ReflectionUtils.GetDelegate> result = new Dictionary<MemberInfo, ReflectionUtils.GetDelegate>();
             foreach (PropertyInfo propertyInfo in ReflectionUtils.GetProperties(type))
             {
                 if (propertyInfo.CanRead)
@@ -1308,14 +1314,14 @@ namespace PlayFab.Json
                     MethodInfo getMethod = ReflectionUtils.GetGetterMethodInfo(propertyInfo);
                     if (getMethod.IsStatic || !getMethod.IsPublic)
                         continue;
-                    result[MapClrMemberNameToJsonFieldName(propertyInfo.Name)] = ReflectionUtils.GetGetMethod(propertyInfo);
+                    result[propertyInfo] = ReflectionUtils.GetGetMethod(propertyInfo);
                 }
             }
             foreach (FieldInfo fieldInfo in ReflectionUtils.GetFields(type))
             {
                 if (fieldInfo.IsStatic || !fieldInfo.IsPublic)
                     continue;
-                result[MapClrMemberNameToJsonFieldName(fieldInfo.Name)] = ReflectionUtils.GetGetMethod(fieldInfo);
+                result[fieldInfo] = ReflectionUtils.GetGetMethod(fieldInfo);
             }
             return result;
         }
@@ -1330,14 +1336,14 @@ namespace PlayFab.Json
                     MethodInfo setMethod = ReflectionUtils.GetSetterMethodInfo(propertyInfo);
                     if (setMethod.IsStatic || !setMethod.IsPublic)
                         continue;
-                    result[MapClrMemberNameToJsonFieldName(propertyInfo.Name)] = new KeyValuePair<Type, ReflectionUtils.SetDelegate>(propertyInfo.PropertyType, ReflectionUtils.GetSetMethod(propertyInfo));
+                    result[MapClrMemberNameToJsonFieldName(propertyInfo)] = new KeyValuePair<Type, ReflectionUtils.SetDelegate>(propertyInfo.PropertyType, ReflectionUtils.GetSetMethod(propertyInfo));
                 }
             }
             foreach (FieldInfo fieldInfo in ReflectionUtils.GetFields(type))
             {
                 if (fieldInfo.IsInitOnly || fieldInfo.IsStatic || !fieldInfo.IsPublic)
                     continue;
-                result[MapClrMemberNameToJsonFieldName(fieldInfo.Name)] = new KeyValuePair<Type, ReflectionUtils.SetDelegate>(fieldInfo.FieldType, ReflectionUtils.GetSetMethod(fieldInfo));
+                result[MapClrMemberNameToJsonFieldName(fieldInfo)] = new KeyValuePair<Type, ReflectionUtils.SetDelegate>(fieldInfo.FieldType, ReflectionUtils.GetSetMethod(fieldInfo));
             }
             return result;
         }
@@ -1528,11 +1534,15 @@ namespace PlayFab.Json
             if (type.FullName == null)
                 return false;
             IDictionary<string, object> obj = new JsonObject();
-            IDictionary<string, ReflectionUtils.GetDelegate> getters = GetCache[type];
-            foreach (KeyValuePair<string, ReflectionUtils.GetDelegate> getter in getters)
+            IDictionary<MemberInfo, ReflectionUtils.GetDelegate> getters = GetCache[type];
+            foreach (KeyValuePair<MemberInfo, ReflectionUtils.GetDelegate> getter in getters)
             {
-                if (getter.Value != null)
-                    obj.Add(MapClrMemberNameToJsonFieldName(getter.Key), getter.Value(input));
+                if (getter.Value == null)
+                    continue;
+                string jsonKey = MapClrMemberNameToJsonFieldName(getter.Key);
+                if (obj.ContainsKey(jsonKey))
+                    throw new Exception("The given key is defined multiple times in the same type: " + input.GetType().Name + "." + jsonKey);
+                obj.Add(MapClrMemberNameToJsonFieldName(getter.Key), getter.Value(input));
             }
             output = obj;
             return true;
@@ -1640,10 +1650,10 @@ namespace PlayFab.Json
         private static object[] _1ObjArray;
 
 #if SIMPLE_JSON_TYPEINFO
-            public static TypeInfo GetTypeInfo(Type type)
-            {
-                return type.GetTypeInfo();
-            }
+        public static TypeInfo GetTypeInfo(Type type)
+        {
+            return type.GetTypeInfo();
+        }
 #else
         public static Type GetTypeInfo(Type type)
         {
@@ -1654,9 +1664,9 @@ namespace PlayFab.Json
         public static Attribute GetAttribute(MemberInfo info, Type type)
         {
 #if SIMPLE_JSON_TYPEINFO
-                if (info == null || type == null || !info.IsDefined(type))
-                    return null;
-                return info.GetCustomAttribute(type);
+            if (info == null || type == null || !info.IsDefined(type))
+                return null;
+            return info.GetCustomAttribute(type);
 #else
             if (info == null || type == null || !Attribute.IsDefined(info, type))
                 return null;
@@ -1668,7 +1678,7 @@ namespace PlayFab.Json
         {
             IEnumerable<Type> interfaces;
 #if SIMPLE_JSON_TYPEINFO
-                interfaces = type.GetTypeInfo().ImplementedInterfaces;
+            interfaces = type.GetTypeInfo().ImplementedInterfaces;
 #else
             interfaces = type.GetInterfaces();
 #endif
@@ -1687,9 +1697,9 @@ namespace PlayFab.Json
         {
 
 #if SIMPLE_JSON_TYPEINFO
-                if (objectType == null || attributeType == null || !objectType.GetTypeInfo().IsDefined(attributeType))
-                    return null;
-                return objectType.GetTypeInfo().GetCustomAttribute(attributeType);
+            if (objectType == null || attributeType == null || !objectType.GetTypeInfo().IsDefined(attributeType))
+                return null;
+            return objectType.GetTypeInfo().GetCustomAttribute(attributeType);
 #else
             if (objectType == null || attributeType == null || !Attribute.IsDefined(objectType, attributeType))
                 return null;
@@ -1700,7 +1710,7 @@ namespace PlayFab.Json
         public static Type[] GetGenericTypeArguments(Type type)
         {
 #if SIMPLE_JSON_TYPEINFO
-                return type.GetTypeInfo().GenericTypeArguments;
+            return type.GetTypeInfo().GenericTypeArguments;
 #else
             return type.GetGenericArguments();
 #endif
@@ -1736,8 +1746,8 @@ namespace PlayFab.Json
         public static bool IsTypeDictionary(Type type)
         {
 #if SIMPLE_JSON_TYPEINFO
-                if (typeof(IDictionary<,>).GetTypeInfo().IsAssignableFrom(type.GetTypeInfo()))
-                    return true;
+            if (typeof(IDictionary<,>).GetTypeInfo().IsAssignableFrom(type.GetTypeInfo()))
+                return true;
 #else
             if (typeof(System.Collections.IDictionary).IsAssignableFrom(type))
                 return true;
@@ -1767,7 +1777,7 @@ namespace PlayFab.Json
         public static IEnumerable<ConstructorInfo> GetConstructors(Type type)
         {
 #if SIMPLE_JSON_TYPEINFO
-                return type.GetTypeInfo().DeclaredConstructors;
+            return type.GetTypeInfo().DeclaredConstructors;
 #else
             return type.GetConstructors();
 #endif
@@ -1805,7 +1815,7 @@ namespace PlayFab.Json
         public static IEnumerable<PropertyInfo> GetProperties(Type type)
         {
 #if SIMPLE_JSON_TYPEINFO
-                return type.GetRuntimeProperties();
+            return type.GetRuntimeProperties();
 #else
             return type.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
 #endif
@@ -1814,7 +1824,7 @@ namespace PlayFab.Json
         public static IEnumerable<FieldInfo> GetFields(Type type)
         {
 #if SIMPLE_JSON_TYPEINFO
-                return type.GetRuntimeFields();
+            return type.GetRuntimeFields();
 #else
             return type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
 #endif
@@ -1823,7 +1833,7 @@ namespace PlayFab.Json
         public static MethodInfo GetGetterMethodInfo(PropertyInfo propertyInfo)
         {
 #if SIMPLE_JSON_TYPEINFO
-                return propertyInfo.GetMethod;
+            return propertyInfo.GetMethod;
 #else
             return propertyInfo.GetGetMethod(true);
 #endif
@@ -1832,7 +1842,7 @@ namespace PlayFab.Json
         public static MethodInfo GetSetterMethodInfo(PropertyInfo propertyInfo)
         {
 #if SIMPLE_JSON_TYPEINFO
-                return propertyInfo.SetMethod;
+            return propertyInfo.SetMethod;
 #else
             return propertyInfo.GetSetMethod(true);
 #endif
