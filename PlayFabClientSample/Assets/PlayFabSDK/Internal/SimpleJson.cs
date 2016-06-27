@@ -71,13 +71,20 @@ using System.Text;
 // ReSharper disable SuggestUseVarKeywordEvident
 namespace PlayFab.Json
 {
+    public enum NullValueHandling
+    {
+        Include, // Include null values when serializing and deserializing objects
+        Ignore // Ignore null values when serializing and deserializing objects
+    }
+
     /// <summary>
     /// Customize the json output of a field or property
     /// </summary>
     [AttributeUsage(AttributeTargets.Property | AttributeTargets.Field)]
     public class JsonProperty : Attribute
     {
-        public string PropertyName;
+        public string PropertyName = null;
+        public NullValueHandling NullValueHandling = NullValueHandling.Include;
     }
 
     /// <summary>
@@ -1294,9 +1301,23 @@ namespace PlayFab.Json
         protected virtual string MapClrMemberNameToJsonFieldName(MemberInfo memberInfo)
         {
             // TODO: Optimize and/or cache
-            foreach (JsonProperty eachProp in memberInfo.GetCustomAttributes(typeof(JsonProperty), true))
-                return eachProp.PropertyName;
+            foreach (JsonProperty eachAttr in memberInfo.GetCustomAttributes(typeof(JsonProperty), true))
+                if (!string.IsNullOrEmpty(eachAttr.PropertyName))
+                    return eachAttr.PropertyName;
             return memberInfo.Name;
+        }
+
+        protected virtual void MapClrMemberNameToJsonFieldName(MemberInfo memberInfo, out string jsonName, out JsonProperty jsonProp)
+        {
+            jsonName = memberInfo.Name;
+            jsonProp = null;
+            // TODO: Optimize and/or cache
+            foreach (JsonProperty eachAttr in memberInfo.GetCustomAttributes(typeof(JsonProperty), true))
+            {
+                jsonProp = eachAttr;
+                if (!string.IsNullOrEmpty(eachAttr.PropertyName))
+                    jsonName = eachAttr.PropertyName;
+            }
         }
 
         internal virtual ReflectionUtils.ConstructorDelegate ContructorDelegateFactory(Type key)
@@ -1539,10 +1560,14 @@ namespace PlayFab.Json
             {
                 if (getter.Value == null)
                     continue;
-                string jsonKey = MapClrMemberNameToJsonFieldName(getter.Key);
+                string jsonKey;
+                JsonProperty jsonProp;
+                MapClrMemberNameToJsonFieldName(getter.Key, out jsonKey, out jsonProp);
                 if (obj.ContainsKey(jsonKey))
                     throw new Exception("The given key is defined multiple times in the same type: " + input.GetType().Name + "." + jsonKey);
-                obj.Add(MapClrMemberNameToJsonFieldName(getter.Key), getter.Value(input));
+                object value = getter.Value(input);
+                if (jsonProp == null || jsonProp.NullValueHandling == NullValueHandling.Include || value != null)
+                    obj.Add(jsonKey, value);
             }
             output = obj;
             return true;
