@@ -131,6 +131,7 @@ namespace PlayFab.Json
 #endif
  IDictionary<string, object>
     {
+        private const int DICTIONARY_DEFAULT_SIZE = 16;
         /// <summary>
         /// The internal member dictionary.
         /// </summary>
@@ -141,7 +142,7 @@ namespace PlayFab.Json
         /// </summary>
         public JsonObject()
         {
-            _members = new Dictionary<string, object>();
+            _members = new Dictionary<string, object>(DICTIONARY_DEFAULT_SIZE);
         }
 
         /// <summary>
@@ -578,9 +579,8 @@ namespace PlayFab.Json
             bool success = true;
             if (json != null)
             {
-                char[] charArray = json.ToCharArray();
                 int index = 0;
-                obj = ParseValue(charArray, ref index, ref success);
+                obj = ParseValue(json, ref index, ref success);
             }
             else
                 obj = null;
@@ -688,7 +688,7 @@ namespace PlayFab.Json
             return sb.ToString();
         }
 
-        static IDictionary<string, object> ParseObject(char[] json, ref int index, ref bool success)
+        static IDictionary<string, object> ParseObject(string json, ref int index, ref bool success)
         {
             IDictionary<string, object> table = new JsonObject();
             TokenType token;
@@ -741,7 +741,7 @@ namespace PlayFab.Json
             return table;
         }
 
-        static JsonArray ParseArray(char[] json, ref int index, ref bool success)
+        static JsonArray ParseArray(string json, ref int index, ref bool success)
         {
             JsonArray array = new JsonArray();
 
@@ -775,7 +775,7 @@ namespace PlayFab.Json
             return array;
         }
 
-        static object ParseValue(char[] json, ref int index, ref bool success)
+        static object ParseValue(string json, ref int index, ref bool success)
         {
             switch (LookAhead(json, index))
             {
@@ -803,7 +803,7 @@ namespace PlayFab.Json
             return null;
         }
 
-        static string ParseString(char[] json, ref int index, ref bool success)
+        static string ParseString(string json, ref int index, ref bool success)
         {
             if (_parseStringBuilder == null)
                 _parseStringBuilder = new StringBuilder(BUILDER_INIT);
@@ -853,7 +853,7 @@ namespace PlayFab.Json
                         {
                             // parse the 32 bit hex into an integer codepoint
                             uint codePoint;
-                            if (!(success = UInt32.TryParse(new string(json, index, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out codePoint)))
+                            if (!(success = UInt32.TryParse(json.Substring(index, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out codePoint)))
                                 return "";
 
                             // convert the integer codepoint to a unicode char and add to string
@@ -864,7 +864,7 @@ namespace PlayFab.Json
                                 if (remainingLength >= 6)
                                 {
                                     uint lowCodePoint;
-                                    if (new string(json, index, 2) == "\\u" && UInt32.TryParse(new string(json, index + 2, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out lowCodePoint))
+                                    if (json.Substring(index, 2) == "\\u" && UInt32.TryParse(json.Substring(index + 2, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out lowCodePoint))
                                     {
                                         if (0xDC00 <= lowCodePoint && lowCodePoint <= 0xDFFF)    // if low surrogate
                                         {
@@ -910,36 +910,36 @@ namespace PlayFab.Json
             return new string(new char[] { (char)((utf32 >> 10) + 0xD800), (char)(utf32 % 0x0400 + 0xDC00) });
         }
 
-        static object ParseNumber(char[] json, ref int index, ref bool success)
+        static object ParseNumber(string json, ref int index, ref bool success)
         {
             EatWhitespace(json, ref index);
             int lastIndex = GetLastIndexOfNumber(json, index);
             int charLength = (lastIndex - index) + 1;
             object returnNumber;
-            string str = new string(json, index, charLength);
+            string str = json.Substring(index, charLength);
             if (str.IndexOf(".", StringComparison.OrdinalIgnoreCase) != -1 || str.IndexOf("e", StringComparison.OrdinalIgnoreCase) != -1)
             {
                 double number;
-                success = double.TryParse(new string(json, index, charLength), NumberStyles.Any, CultureInfo.InvariantCulture, out number);
+                success = double.TryParse(json.Substring(index, charLength), NumberStyles.Any, CultureInfo.InvariantCulture, out number);
                 returnNumber = number;
             }
             else if (str.IndexOf("-", StringComparison.OrdinalIgnoreCase) == -1)
             {
                 ulong number;
-                success = ulong.TryParse(new string(json, index, charLength), NumberStyles.Any, CultureInfo.InvariantCulture, out number);
+                success = ulong.TryParse(json.Substring(index, charLength), NumberStyles.Any, CultureInfo.InvariantCulture, out number);
                 returnNumber = number;
             }
             else
             {
                 long number;
-                success = long.TryParse(new string(json, index, charLength), NumberStyles.Any, CultureInfo.InvariantCulture, out number);
+                success = long.TryParse(json.Substring(index, charLength), NumberStyles.Any, CultureInfo.InvariantCulture, out number);
                 returnNumber = number;
             }
             index = lastIndex + 1;
             return returnNumber;
         }
 
-        static int GetLastIndexOfNumber(char[] json, int index)
+        static int GetLastIndexOfNumber(string json, int index)
         {
             int lastIndex;
             for (lastIndex = index; lastIndex < json.Length; lastIndex++)
@@ -947,20 +947,20 @@ namespace PlayFab.Json
             return lastIndex - 1;
         }
 
-        static void EatWhitespace(char[] json, ref int index)
+        static void EatWhitespace(string json, ref int index)
         {
             for (; index < json.Length; index++)
                 if (" \t\n\r\b\f".IndexOf(json[index]) == -1) break;
         }
 
-        static TokenType LookAhead(char[] json, int index)
+        static TokenType LookAhead(string json, int index)
         {
             int saveIndex = index;
             return NextToken(json, ref saveIndex);
         }
 
         [SuppressMessage("Microsoft.Maintainability", "CA1502:AvoidExcessiveComplexity")]
-        static TokenType NextToken(char[] json, ref int index)
+        static TokenType NextToken(string json, ref int index)
         {
             EatWhitespace(json, ref index);
             if (index == json.Length)
